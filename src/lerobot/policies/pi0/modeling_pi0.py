@@ -1042,6 +1042,16 @@ class PI0Policy(PreTrainedPolicy):
                         print(f"  - {key}")
                     print(f"  ... and {len(unexpected_keys) - 5} more")
 
+            # Tie embed_tokens to lm_head if embed_tokens is missing from checkpoint
+            # PaliGemma uses weight tying between embed_tokens and lm_head,
+            # but fine-tuned PI0 checkpoints may omit embed_tokens (frozen during training)
+            embed_keys_missing = [k for k in missing_keys if "embed_tokens" in k]
+            if embed_keys_missing:
+                model.model.paligemma_with_expert.paligemma.language_model.model.embed_tokens.weight = (
+                    model.model.paligemma_with_expert.paligemma.lm_head.weight
+                )
+                print(f"Tied embed_tokens to lm_head (fixed {len(embed_keys_missing)} missing key(s))")
+
             if not missing_keys and not unexpected_keys:
                 print("All keys loaded successfully!")
 
