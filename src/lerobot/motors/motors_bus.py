@@ -21,6 +21,7 @@
 
 import abc
 import logging
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -461,9 +462,24 @@ class MotorsBus(abc.ABC):
             )
 
         if disable_torque:
+            # Give the motor bus a moment to settle after high-frequency teleoperation
+            # before sending torque-disable commands, to avoid overload errors.
+            time.sleep(0.2)
             self.port_handler.clearPort()
             self.port_handler.is_using = False
-            self.disable_torque(num_retry=5)
+            # Issue a light read first to drain any pending writes from the motor pipeline.
+            try:
+                self.sync_read("Present_Position", num_retry=3)
+            except Exception:
+                pass
+            try:
+                self.disable_torque(num_retry=5)
+            except Exception:
+                logger.warning(
+                    f"Failed to disable torque on {self.__class__.__name__}('{self.port}'). "
+                    "The port will be closed anyway, but motors may remain under torque.",
+                    exc_info=True,
+                )
 
         self.port_handler.closePort()
         logger.debug(f"{self.__class__.__name__} disconnected.")
@@ -580,21 +596,25 @@ class MotorsBus(abc.ABC):
         pass
 
     @contextmanager
-    def torque_disabled(self, motors: int | str | list[str] | None = None):
+    def torque_disabled(self, motors: int | str | list[str] | None = None, num_retry: int = 5):
         """Context-manager that guarantees torque is re-enabled.
 
         This helper is useful to temporarily disable torque when configuring motors.
+
+        Args:
+            motors: Motors to disable/enable torque on. `None` (default) applies to all motors.
+            num_retry: Number of retries for torque enable/disable writes.
 
         Examples:
             >>> with bus.torque_disabled():
             ...     # Safe operations here
             ...     pass
         """
-        self.disable_torque(motors)
+        self.disable_torque(motors, num_retry=num_retry)
         try:
             yield
         finally:
-            self.enable_torque(motors)
+            self.enable_torque(motors, num_retry=num_retry)
 
     def set_timeout(self, timeout_ms: int | None = None):
         """Change the packet timeout used by the SDK.
